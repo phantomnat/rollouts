@@ -1,0 +1,69 @@
+#############################################
+# stages
+#############################################
+stages:
+  - prepare
+  - build
+
+variables:
+  KRUISE_ROLLOUT_IMAGE_REPOSITORY: "privatecloud/kruise-rollout"
+  KRUISE_ROLLOUT_IMAGE_TAG: "dev"
+
+#############################################
+# include
+#############################################
+include:
+  - project: 'devops/ci-templates'
+    ref: master
+    file:
+      - '/templates/Docker/Kaniko.gitlab-ci.yml'
+
+#############################################
+# anchors
+#############################################
+.base_rules:
+  rules:
+    - &push_default_branch
+      if: $CLUSTER == null && $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - &merge_request
+      if: $CLUSTER == null && $CI_PIPELINE_SOURCE == "merge_request_event"
+
+prepare:
+  needs: []
+  stage: prepare
+  image:
+    name: $HARBOR_REGISTRY/privatecloud/cli:v1
+    entrypoint: [ "" ]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CLUSTER != null'
+  script:
+    - |
+      COMMIT_SHORT=$(git rev-parse --short HEAD)
+      COMMIT_DATE=$(git log -1 --format=%cd --date=format:"%Y%m%d")
+      if [ "${CI_COMMIT_BRANCH}" = "${CI_DEFAULT_BRANCH}" ]; then
+        KRUISE_ROLLOUT_IMAGE_TAG="${COMMIT_DATE}-${COMMIT_SHORT}"
+      else
+        KRUISE_ROLLOUT_IMAGE_TAG="dev-${CI_COMMIT_REF_SLUG}-${COMMIT_SHORT}"
+      fi
+      echo "KRUISE_ROLLOUT_IMAGE_TAG=$KRUISE_ROLLOUT_IMAGE_TAG" > output.env
+  artifacts:
+    reports:
+      dotenv: output.env
+
+build-image:
+  stage: publish
+  needs:
+    - prepare
+  rules:
+    - *push_default_branch
+    - *merge_request
+  extends:
+    - .docker_build_push
+  variables:
+    DOCKERFILE: "Dockerfile_multiarch"
+    HARBOR_IMAGE: ${KRUISE_ROLLOUT_IMAGE_REPOSITORY}
+    HARBOR_TAG: ${KRUISE_ROLLOUT_IMAGE_TAG}
